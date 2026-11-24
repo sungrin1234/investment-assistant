@@ -18,16 +18,65 @@ HEADERS = {
 REQUEST_TIMEOUT = 10
 
 
-def validate_stock_code(code: str) -> str:
-    """종목코드가 6자리 숫자인지 검증하고 정제된 코드를 반환한다."""
-    if not code or not str(code).strip():
-        raise ValueError("종목코드가 입력되지 않았습니다.")
+def resolve_stock_code(query: str) -> str:
+    """종목명 또는 줄임말(예: '삼성전자', '삼전')을 네이버 자동완성 API로 조회해 국내 6자리 종목코드로 변환한다."""
+    url = "https://ac.stock.naver.com/ac"
+    params = {"q": query, "target": "stock"}
+    logger.info("[NAVER] 종목명 자동완성 검색 시작 (query=%s)", query)
 
-    cleaned = str(code).strip()
-    if not re.fullmatch(r"\d{6}", cleaned):
-        raise ValueError(f"종목코드는 6자리 숫자여야 합니다. (입력값: '{cleaned}')")
+    try:
+        response = requests.get(url, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+    except requests.exceptions.Timeout as exc:
+        logger.error("[ERROR] 종목명 검색 타임아웃: %s", exc)
+        raise RuntimeError("네트워크 타임아웃: 종목명 검색 서버 응답이 지연되고 있습니다.") from exc
+    except requests.exceptions.RequestException as exc:
+        logger.error("[ERROR] 종목명 검색 네트워크 오류: %s", exc)
+        raise RuntimeError(f"종목명 검색 중 네트워크 오류가 발생했습니다: {exc}") from exc
 
-    return cleaned
+    if response.status_code != 200:
+        raise RuntimeError(f"종목명 검색 실패 (HTTP {response.status_code})")
+
+    try:
+        items = response.json().get("items") or []
+    except ValueError as exc:
+        raise RuntimeError("JSON 변환 실패: 종목명 검색 응답 형식이 올바르지 않습니다.") from exc
+
+    # 부작용 방지 필터: 국내 종목(KOR) + 순수 6자리 숫자 코드만 허용
+    kor_candidates = [
+        item for item in items
+        if isinstance(item, dict)
+        and item.get("nationCode") == "KOR"
+        and re.fullmatch(r"\d{6}", str(item.get("code", "")))
+    ]
+
+    if not kor_candidates:
+        raise ValueError(f"'{query}'에 해당하는 국내 주식/ETF 종목을 찾을 수 없습니다.")
+
+    # 정확히 이름이 일치하는 항목이 있으면 최우선 선택
+    normalized_q = query.replace(" ", "").upper()
+    for item in kor_candidates:
+        item_name = str(item.get("name", "")).replace(" ", "").upper()
+        if item_name == normalized_q:
+            resolved_code = item["code"]
+            logger.info("[NAVER] 종목명 정확 매칭 완료 (query=%s -> code=%s, name=%s)", query, resolved_code, item.get("name"))
+            return resolved_code
+
+    # 그 외에는 네이버 검색 1순위 선택
+    best = kor_candidates[0]
+    logger.info("[NAVER] 종목명 자동완성 1순위 선택 (query=%s -> code=%s, name=%s)", query, best["code"], best.get("name"))
+    return best["code"]
+
+
+def validate_stock_code(code_or_name: str) -> str:
+    """6자리 숫자 코드면 그대로 반환하고, 종목명/줄임말이면 네이버 자동완성으로 6자리 코드를 찾아 반환한다."""
+    if not code_or_name or not str(code_or_name).strip():
+        raise ValueError("종목명 또는 종목코드가 입력되지 않았습니다.")
+
+    cleaned = str(code_or_name).strip()
+    if re.fullmatch(r"\d{6}", cleaned):
+        return cleaned
+
+    return resolve_stock_code(cleaned)
 
 
 def parse_number(value, as_int: bool = False):
