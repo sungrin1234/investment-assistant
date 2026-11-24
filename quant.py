@@ -235,19 +235,23 @@ def calculate_technical_indicators(code: str) -> dict:
     prev_row = recent_df.iloc[-2] if len(recent_df) >= 2 else latest_row
 
     stock_name = _safe_stock_name(valid_code)
+    is_kr = valid_code.isdigit() and len(valid_code) == 6
+    price_digits = 0 if is_kr else 2
+    currency = "KRW" if is_kr else "USD"
+
     latest_close = float(latest_row["Close"])
     prev_close = float(prev_row["Close"])
     change_pct = ((latest_close - prev_close) / prev_close * 100) if prev_close else 0.0
 
     latest_summary = {
         "date": recent_df.index[-1].strftime("%Y-%m-%d"),
-        "close": int(round(latest_close)),
+        "close": int(round(latest_close)) if is_kr else round(latest_close, 2),
         "change_pct": round(change_pct, 2),
-        "ma5": _clean_float(latest_row["MA5"], 0),
-        "ma20": _clean_float(latest_row["MA20"], 0),
-        "ma60": _clean_float(latest_row["MA60"], 0),
-        "bb_upper": _clean_float(latest_row["BB_UPPER"], 0),
-        "bb_lower": _clean_float(latest_row["BB_LOWER"], 0),
+        "ma5": _clean_float(latest_row["MA5"], price_digits),
+        "ma20": _clean_float(latest_row["MA20"], price_digits),
+        "ma60": _clean_float(latest_row["MA60"], price_digits),
+        "bb_upper": _clean_float(latest_row["BB_UPPER"], price_digits),
+        "bb_lower": _clean_float(latest_row["BB_LOWER"], price_digits),
         "rsi14": _clean_float(latest_row["RSI14"], 2),
         "macd": _clean_float(latest_row["MACD"], 2),
         "macd_signal": _clean_float(latest_row["MACD_SIGNAL"], 2),
@@ -256,12 +260,12 @@ def calculate_technical_indicators(code: str) -> dict:
 
     series = {
         "dates": [idx.strftime("%Y-%m-%d") for idx in recent_df.index],
-        "close": [_clean_float(v, 0) for v in recent_df["Close"]],
-        "ma5": [_clean_float(v, 0) for v in recent_df["MA5"]],
-        "ma20": [_clean_float(v, 0) for v in recent_df["MA20"]],
-        "ma60": [_clean_float(v, 0) for v in recent_df["MA60"]],
-        "bb_upper": [_clean_float(v, 0) for v in recent_df["BB_UPPER"]],
-        "bb_lower": [_clean_float(v, 0) for v in recent_df["BB_LOWER"]],
+        "close": [_clean_float(v, price_digits) for v in recent_df["Close"]],
+        "ma5": [_clean_float(v, price_digits) for v in recent_df["MA5"]],
+        "ma20": [_clean_float(v, price_digits) for v in recent_df["MA20"]],
+        "ma60": [_clean_float(v, price_digits) for v in recent_df["MA60"]],
+        "bb_upper": [_clean_float(v, price_digits) for v in recent_df["BB_UPPER"]],
+        "bb_lower": [_clean_float(v, price_digits) for v in recent_df["BB_LOWER"]],
         "rsi14": [_clean_float(v, 2) for v in recent_df["RSI14"]],
         "macd": [_clean_float(v, 2) for v in recent_df["MACD"]],
         "macd_signal": [_clean_float(v, 2) for v in recent_df["MACD_SIGNAL"]],
@@ -269,15 +273,17 @@ def calculate_technical_indicators(code: str) -> dict:
     }
 
     logger.info(
-        "[QUANT] 기술지표 계산 완료 (code=%s, name=%s, RSI14=%s)",
+        "[QUANT] 기술지표 계산 완료 (code=%s, name=%s, currency=%s, RSI14=%s)",
         valid_code,
         stock_name,
+        currency,
         latest_summary["rsi14"],
     )
 
     return {
         "code": valid_code,
         "name": stock_name,
+        "currency": currency,
         "latest": latest_summary,
         "series": series,
     }

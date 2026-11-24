@@ -212,28 +212,100 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    let evPriceChart = null;
+    let evEtfChart = null;
+    let evEtfDivChart = null;
+    let evFinChart = null;
+
+    // 탭1 수집 근거 서브탭 전환
+    document.querySelectorAll(".evidence-subtab-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            const target = btn.dataset.subtab;
+            document.querySelectorAll(".evidence-subtab-btn").forEach((b) => b.classList.remove("active"));
+            btn.classList.add("active");
+            document.querySelectorAll(".evidence-subpanel").forEach((p) => p.classList.add("hidden"));
+            const panel = document.getElementById(`ev-panel-${target}`);
+            if (panel) panel.classList.remove("hidden");
+            if (target === "company" && evPriceChart) evPriceChart.resize();
+            if (target === "company" && evEtfChart) evEtfChart.resize();
+            if (target === "company" && evEtfDivChart) evEtfDivChart.resize();
+            if (target === "financial" && evFinChart) evFinChart.resize();
+        });
+    });
+
     function renderEvidenceBox(ev) {
         const box = document.getElementById("tab1-evidence-box");
         const summary = document.getElementById("tab1-evidence-summary");
         const cardsEl = document.getElementById("tab1-evidence-cards");
         const newsEl = document.getElementById("tab1-evidence-news");
 
+        // 새 종목 조회 시 기본 서브탭(요약 & 뉴스)으로 초기화
+        document.querySelectorAll(".evidence-subtab-btn").forEach((b) => {
+            b.classList.toggle("active", b.dataset.subtab === "summary");
+        });
+        document.querySelectorAll(".evidence-subpanel").forEach((p) => {
+            p.classList.toggle("hidden", p.id !== "ev-panel-summary");
+        });
+
         const snap = ev.snapshot || {};
-        const price = snap.current_price != null ? `${Number(snap.current_price).toLocaleString()}원` : "-";
+        const currency = ev.currency || "KRW";
+        const details = ev.details || {};
+        const isEtf = Boolean(ev.is_etf);
+        const tables = details.financial_tables || {};
+        const hasFinTables = Boolean(tables.annual || tables.quarter);
+
+        // ETF 여부에 따라 서브탭 라벨 및 재무분석 탭 표시 동적 조정
+        document.querySelectorAll(".evidence-subtab-btn").forEach((b) => {
+            if (b.dataset.subtab === "company") {
+                b.textContent = isEtf ? "상품현황 · 구성" : "기업현황";
+            } else if (b.dataset.subtab === "overview") {
+                b.textContent = isEtf ? "상품개요" : "기업개요";
+            } else if (b.dataset.subtab === "financial") {
+                b.textContent = "재무분석";
+                b.classList.toggle("hidden", isEtf && !hasFinTables);
+            }
+        });
+
+        const price = formatPrice(snap.current_price, currency);
         const rate = snap.change_rate != null ? `${snap.change_rate > 0 ? "+" : ""}${snap.change_rate}%` : "-";
-        const mcap = formatMarketCap(snap.market_cap);
+        const mcap = formatMarketCap(snap.market_cap, currency);
         const per = snap.per != null ? `${snap.per}배` : "-";
         const pbr = snap.pbr != null ? `${snap.pbr}배` : "-";
 
         summary.textContent = `${ev.name} (${ev.code})`;
+        const marketBadge = document.getElementById("tab1-evidence-market");
+        if (marketBadge) {
+            const marketLabel = ev.market || (currency === "USD" ? "US" : "KR");
+            marketBadge.textContent = isEtf ? `${marketLabel} · ${currency} · ETF` : `${marketLabel} · ${currency}`;
+            marketBadge.classList.remove("hidden");
+        }
 
         cardsEl.innerHTML = "";
-        const items = [
-            { label: "현재가", value: `${price} (${rate})` },
-            { label: "시가총액", value: mcap },
-            { label: "PER / PBR", value: `${per} / ${pbr}` },
-            { label: "수집 실적", value: `${(ev.financials || []).length}개년` },
-        ];
+        const etfInfo = details.etf_info;
+        const etfConst = details.etf_constituents;
+        const items = isEtf
+            ? [
+                { label: "현재가", value: `${price} (${rate})` },
+                { label: "시가총액", value: mcap },
+                {
+                    label: "총보수 / 괴리율",
+                    value: etfInfo
+                        ? `${etfInfo.total_fee != null ? etfInfo.total_fee + "%" : "-"} / ${etfInfo.deviation_rate != null ? etfInfo.deviation_rate + "%" : "-"}`
+                        : `${per} / ${pbr}`,
+                },
+                {
+                    label: "구성종목",
+                    value: etfConst && etfConst.total_count
+                        ? `${etfConst.total_count}개 종목`
+                        : (etfInfo && etfInfo.nav ? `NAV ${etfInfo.nav}` : "-"),
+                },
+            ]
+            : [
+                { label: "현재가", value: `${price} (${rate})` },
+                { label: "시가총액", value: mcap },
+                { label: "PER / PBR", value: `${per} / ${pbr}` },
+                { label: "수집 실적", value: `${(ev.financials || []).length}개년` },
+            ];
         items.forEach((it) => {
             const chip = document.createElement("div");
             chip.className = "evidence-chip";
@@ -269,7 +341,604 @@ document.addEventListener("DOMContentLoaded", () => {
             newsEl.appendChild(ul);
         }
 
+        renderCompanyTab(ev, details);
+        renderOverviewTab(ev, details);
+        renderFinancialTab(ev, details);
+
         box.classList.remove("hidden");
+    }
+
+    function _makeChip(label, value) {
+        const chip = document.createElement("div");
+        chip.className = "evidence-chip";
+        const lbl = document.createElement("span");
+        lbl.textContent = label;
+        const val = document.createElement("strong");
+        val.textContent = value || "-";
+        chip.appendChild(lbl);
+        chip.appendChild(val);
+        return chip;
+    }
+
+    function renderCompanyTab(ev, details) {
+        const container = document.getElementById("tab1-company-content");
+        if (!container) return;
+        container.innerHTML = "";
+
+        const ph = details.price_history || {};
+        if ((ph.dates || []).length > 0 && typeof Chart !== "undefined") {
+            const chartSec = document.createElement("div");
+            chartSec.className = "detail-section";
+            chartSec.innerHTML = `<div class="detail-section-title">📈 최근 ${ph.dates.length}거래일 주가 추이 (${ev.currency || "KRW"})</div>`;
+            const card = document.createElement("div");
+            card.className = "evidence-chart-card";
+            const box = document.createElement("div");
+            box.className = "evidence-chart-box";
+            const canvas = document.createElement("canvas");
+            box.appendChild(canvas);
+            card.appendChild(box);
+            chartSec.appendChild(card);
+            container.appendChild(chartSec);
+
+            if (evPriceChart) evPriceChart.destroy();
+            evPriceChart = new Chart(canvas, {
+                type: "line",
+                data: {
+                    labels: ph.dates,
+                    datasets: [{
+                        label: `${ev.name} 종가`,
+                        data: ph.closes,
+                        borderColor: "#2563eb",
+                        backgroundColor: "rgba(37, 99, 235, 0.08)",
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
+                        fill: true,
+                        tension: 0.2,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { ticks: { maxTicksLimit: 6, font: { size: 11 } }, grid: { display: false } },
+                        y: { ticks: { font: { size: 11 } } },
+                    },
+                },
+            });
+        }
+
+        const m = details.metrics || {};
+
+        // 당일 시세 & 거래 현황
+        const tradePairs = [
+            ["전일 / 시가", m.prev_close || m.open_price ? `${m.prev_close || "-"} / ${m.open_price || "-"}` : null],
+            ["고가 / 저가", m.high_price || m.low_price ? `${m.high_price || "-"} / ${m.low_price || "-"}` : null],
+            ["거래량", m.volume],
+            ["거래대금", m.trading_value],
+            ["52주 최고 / 최저", m.high_52w || m.low_52w ? `${m.high_52w || "-"} / ${m.low_52w || "-"}` : null],
+            ["외국인 소진율", m.foreign_rate],
+            ["발행주식 / 유동비율", m.shares_float],
+            ["기간 수익률 (1M/3M/6M/1Y)", m.returns_period],
+        ].filter(([, v]) => v);
+
+        if (tradePairs.length > 0) {
+            const secTrade = document.createElement("div");
+            secTrade.className = "detail-section";
+            secTrade.innerHTML = `<div class="detail-section-title">💹 시세 · 거래 · 수익률 현황</div>`;
+            const tGrid = document.createElement("div");
+            tGrid.className = "detail-grid";
+            tradePairs.forEach(([k, v]) => tGrid.appendChild(_makeChip(k, v)));
+            secTrade.appendChild(tGrid);
+            container.appendChild(secTrade);
+        }
+
+        // 주요 투자·밸류에이션 지표
+        const valPairs = [
+            ["업종", m.industry],
+            ["EPS / BPS", m.eps || m.bps ? `${m.eps || "-"} / ${m.bps || "-"}` : null],
+            ["추정 PER / EPS", m.cns_per || m.cns_eps ? `${m.cns_per || "-"} / ${m.cns_eps || "-"}` : null],
+            ["배당 / 수익률", m.dividend || m.dividend_yield ? `${m.dividend || "-"} (${m.dividend_yield || "-"})` : null],
+            ["EV/EBITDA", m.ev_ebitda],
+            ["PCR", m.pcr],
+            ["52주 베타", m.beta],
+            ["액면가 / 액면분할", m.face_value || m.split_info],
+            ["배당락일 / 배당일", m.ex_dividend_date || m.dividend_date ? `${m.ex_dividend_date || "-"} / ${m.dividend_date || "-"}` : null],
+        ].filter(([, v]) => v);
+
+        if (valPairs.length > 0) {
+            const sec1 = document.createElement("div");
+            sec1.className = "detail-section";
+            sec1.innerHTML = `<div class="detail-section-title">📊 주요 투자 · 밸류에이션 지표</div>`;
+            const grid = document.createElement("div");
+            grid.className = "detail-grid";
+            valPairs.forEach(([k, v]) => grid.appendChild(_makeChip(k, v)));
+            sec1.appendChild(grid);
+            container.appendChild(sec1);
+        }
+
+        // ETF 핵심 지표 (운용사, NAV, 총보수, 괴리율, 수익률)
+        if (details.etf_info) {
+            const ei = details.etf_info;
+            const etfPairs = [
+                ["운용사", ei.issuer],
+                ["NAV / 순자산총액", ei.nav || ei.total_nav ? `${ei.nav || "-"} / ${ei.total_nav || "-"}` : null],
+                ["총보수 / 괴리율", `${ei.total_fee != null ? ei.total_fee + "%" : "-"} / ${ei.deviation_rate != null ? ei.deviation_rate + "%" : "-"}`],
+                ["ETF 수익률 (1M/3M/1Y)", `${ei.return_1m ?? "-"}% / ${ei.return_3m ?? "-"}% / ${ei.return_1y ?? "-"}%`],
+            ].filter(([, v]) => v);
+
+            if (etfPairs.length > 0) {
+                const secEtf = document.createElement("div");
+                secEtf.className = "detail-section";
+                secEtf.innerHTML = `<div class="detail-section-title">🏷️ ETF 운용 · 수익률 정보</div>`;
+                const eGrid = document.createElement("div");
+                eGrid.className = "detail-grid";
+                etfPairs.forEach(([k, v]) => eGrid.appendChild(_makeChip(k, v)));
+                secEtf.appendChild(eGrid);
+                container.appendChild(secEtf);
+            }
+        }
+
+        // ETF 배당(분배금) 정보 & 지급 내역
+        if (details.etf_dividend) {
+            const ed = details.etf_dividend;
+            const secD = document.createElement("div");
+            secD.className = "detail-section";
+            secD.innerHTML = `<div class="detail-section-title">💰 ETF 배당(분배금) 정보</div>`;
+
+            const divPairs = [
+                ["연간 배당률 (TTM)", ed.yield_ttm != null ? `${ed.yield_ttm}%` : null],
+                ["연간 주당 분배금 (TTM)", ed.dps_ttm != null ? `${Number(ed.dps_ttm).toLocaleString()}원` : null],
+                [
+                    "올해 배당 횟수 / 배당월",
+                    ed.count_this_year
+                        ? `${ed.count_this_year}회${ed.months_this_year ? ` (${ed.months_this_year}월)` : ""}`
+                        : null,
+                ],
+                [
+                    "최근 배당락일 / 분배금",
+                    ed.recent_ex_date
+                        ? `${ed.recent_ex_date} / ${ed.recent_amount ? Number(ed.recent_amount).toLocaleString() + "원" : "-"}${ed.recent_yield ? ` (${ed.recent_yield}%)` : ""}`
+                        : null,
+                ],
+            ].filter(([, v]) => v);
+
+            if (divPairs.length > 0) {
+                const dGrid = document.createElement("div");
+                dGrid.className = "detail-grid";
+                dGrid.style.marginBottom = "10px";
+                divPairs.forEach(([k, v]) => dGrid.appendChild(_makeChip(k, v)));
+                secD.appendChild(dGrid);
+            }
+
+            const hist = ed.history || [];
+            if (hist.length > 0) {
+                if (typeof Chart !== "undefined") {
+                    const ordered = [...hist].reverse();
+                    const chartCard = document.createElement("div");
+                    chartCard.className = "evidence-chart-card";
+                    const chartBox = document.createElement("div");
+                    chartBox.className = "evidence-chart-box";
+                    const canvas = document.createElement("canvas");
+                    chartBox.appendChild(canvas);
+                    chartCard.appendChild(chartBox);
+                    secD.appendChild(chartCard);
+
+                    if (evEtfDivChart) evEtfDivChart.destroy();
+                    evEtfDivChart = new Chart(canvas, {
+                        type: "bar",
+                        data: {
+                            labels: ordered.map((h) => h.ex_date),
+                            datasets: [{
+                                label: "주당 분배금 (원)",
+                                data: ordered.map((h) => Number(String(h.amount || "0").replace(/,/g, ""))),
+                                backgroundColor: "rgba(16, 185, 129, 0.8)",
+                                borderRadius: 4,
+                            }],
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: { legend: { display: false } },
+                            scales: {
+                                x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+                                y: { ticks: { font: { size: 11 } } },
+                            },
+                        },
+                    });
+                }
+
+                const wrap = document.createElement("div");
+                wrap.className = "table-wrapper";
+                const table = document.createElement("table");
+                table.className = "financials-table";
+                table.innerHTML = "<thead><tr><th>배당락일</th><th>주당 분배금</th><th>배당률</th></tr></thead>";
+                const tbody = document.createElement("tbody");
+                hist.forEach((h) => {
+                    const tr = document.createElement("tr");
+                    const tdDate = document.createElement("td");
+                    tdDate.textContent = h.ex_date || "-";
+                    const tdAmt = document.createElement("td");
+                    tdAmt.style.fontWeight = "600";
+                    tdAmt.textContent = h.amount != null ? `${Number(String(h.amount).replace(/,/g, "")).toLocaleString()}원` : "-";
+                    const tdY = document.createElement("td");
+                    tdY.textContent = h.yield != null ? `${h.yield}%` : "-";
+                    tr.appendChild(tdDate);
+                    tr.appendChild(tdAmt);
+                    tr.appendChild(tdY);
+                    tbody.appendChild(tr);
+                });
+                table.appendChild(tbody);
+                wrap.appendChild(table);
+                secD.appendChild(wrap);
+            }
+
+            container.appendChild(secD);
+        }
+
+        // ETF 구성종목 (비중 차트 + 테이블)
+        if (details.etf_constituents && (details.etf_constituents.holdings || []).length > 0) {
+            const ec = details.etf_constituents;
+            const holdings = ec.holdings;
+            const secH = document.createElement("div");
+            secH.className = "detail-section";
+            secH.innerHTML = `<div class="detail-section-title">🧩 ETF 구성종목 (전체 ${ec.total_count || holdings.length}개 중 상위 ${holdings.length}개 · 비중 합계 ${ec.total_weight ?? "-"}%)</div>`;
+
+            // 상위 10개 비중 가로 막대 차트
+            if (typeof Chart !== "undefined") {
+                const top10 = holdings.slice(0, 10);
+                const chartCard = document.createElement("div");
+                chartCard.className = "evidence-chart-card";
+                const chartBox = document.createElement("div");
+                chartBox.className = "evidence-chart-box";
+                const canvas = document.createElement("canvas");
+                chartBox.appendChild(canvas);
+                chartCard.appendChild(chartBox);
+                secH.appendChild(chartCard);
+
+                if (evEtfChart) evEtfChart.destroy();
+                evEtfChart = new Chart(canvas, {
+                    type: "bar",
+                    data: {
+                        labels: top10.map((h) => h.name || h.code),
+                        datasets: [{
+                            label: "구성 비중 (%)",
+                            data: top10.map((h) => h.weight),
+                            backgroundColor: "rgba(37, 99, 235, 0.78)",
+                            borderRadius: 4,
+                        }],
+                    },
+                    options: {
+                        indexAxis: "y",
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: { ticks: { callback: (v) => `${v}%`, font: { size: 11 } } },
+                            y: { grid: { display: false }, ticks: { font: { size: 11 } } },
+                        },
+                    },
+                });
+            }
+
+            // 구성종목 테이블
+            const wrap = document.createElement("div");
+            wrap.className = "table-wrapper";
+            const table = document.createElement("table");
+            table.className = "financials-table";
+            table.innerHTML = "<thead><tr><th>순위</th><th>종목명 (코드)</th><th>구성비중</th><th>1CU당 수량</th></tr></thead>";
+            const tbody = document.createElement("tbody");
+            holdings.forEach((h, idx) => {
+                const tr = document.createElement("tr");
+                const tdRank = document.createElement("td");
+                tdRank.textContent = String(idx + 1);
+                const tdName = document.createElement("td");
+                tdName.style.fontWeight = "600";
+                tdName.textContent = `${h.name || "-"} (${h.code || "-"})`;
+                const tdW = document.createElement("td");
+                tdW.textContent = h.weight != null ? `${h.weight}%` : "-";
+                const tdQ = document.createElement("td");
+                tdQ.textContent = h.quantity != null ? `${Number(h.quantity).toLocaleString()} ${h.unit || "주"}` : "-";
+                tr.appendChild(tdRank);
+                tr.appendChild(tdName);
+                tr.appendChild(tdW);
+                tr.appendChild(tdQ);
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+            wrap.appendChild(table);
+            secH.appendChild(wrap);
+            container.appendChild(secH);
+        }
+
+        if (details.consensus) {
+            const c = details.consensus;
+            const secC = document.createElement("div");
+            secC.className = "detail-section";
+            secC.innerHTML = `<div class="detail-section-title">🎯 증권사 컨센서스</div>`;
+            const cGrid = document.createElement("div");
+            cGrid.className = "detail-grid";
+            cGrid.appendChild(_makeChip("목표주가", c.target_price || "-"));
+            cGrid.appendChild(_makeChip("투자의견 점수", c.recomm_mean ? `${c.recomm_mean} / 5.0` : "-"));
+            cGrid.appendChild(_makeChip("기준일", c.create_date || "-"));
+            secC.appendChild(cGrid);
+            container.appendChild(secC);
+        }
+
+        const peers = details.peers || [];
+        if (peers.length > 0) {
+            const secP = document.createElement("div");
+            secP.className = "detail-section";
+            secP.innerHTML = `<div class="detail-section-title">🏢 동종업계 비교</div>`;
+            const ul = document.createElement("ul");
+            ul.className = "detail-list";
+            peers.forEach((p) => {
+                const li = document.createElement("li");
+                li.className = "detail-list-item";
+                const left = document.createElement("strong");
+                left.textContent = `${p.name || "-"} (${p.code || "-"})`;
+                const right = document.createElement("span");
+                const rVal = p.change_rate != null ? `${Number(p.change_rate) > 0 ? "+" : ""}${p.change_rate}%` : "-";
+                right.textContent = `${p.close_price || "-"} (${rVal})`;
+                li.appendChild(left);
+                li.appendChild(right);
+                ul.appendChild(li);
+            });
+            secP.appendChild(ul);
+            container.appendChild(secP);
+        }
+
+        const reports = details.reports || [];
+        if (reports.length > 0) {
+            const secR = document.createElement("div");
+            secR.className = "detail-section";
+            secR.innerHTML = `<div class="detail-section-title">📑 최근 증권사 리포트</div>`;
+            const ul = document.createElement("ul");
+            ul.className = "detail-list";
+            reports.forEach((r) => {
+                const li = document.createElement("li");
+                li.className = "detail-list-item";
+                const left = document.createElement("span");
+                left.textContent = r.title || "-";
+                const right = document.createElement("span");
+                right.style.color = "#64748b";
+                right.textContent = `${r.broker || ""} ${r.date || ""}`.trim();
+                li.appendChild(left);
+                li.appendChild(right);
+                ul.appendChild(li);
+            });
+            secR.appendChild(ul);
+            container.appendChild(secR);
+        }
+
+        const trends = details.investor_trends || [];
+        if (trends.length > 0) {
+            const secT = document.createElement("div");
+            secT.className = "detail-section";
+            secT.innerHTML = `<div class="detail-section-title">👥 최근 투자자별 순매수 (주)</div>`;
+            const wrap = document.createElement("div");
+            wrap.className = "table-wrapper";
+            const table = document.createElement("table");
+            table.className = "financials-table";
+            table.innerHTML = "<thead><tr><th>일자</th><th>외국인</th><th>기관</th><th>개인</th><th>외국인 보유율</th></tr></thead>";
+            const tbody = document.createElement("tbody");
+            trends.forEach((t) => {
+                const tr = document.createElement("tr");
+                [t.date, t.foreigner, t.organ, t.individual, t.foreigner_ratio].forEach((val) => {
+                    const td = document.createElement("td");
+                    td.textContent = val || "-";
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+            wrap.appendChild(table);
+            secT.appendChild(wrap);
+            container.appendChild(secT);
+        }
+    }
+
+    function renderOverviewTab(ev, details) {
+        const container = document.getElementById("tab1-overview-content");
+        if (!container) return;
+        container.innerHTML = "";
+
+        const m = details.metrics || {};
+        const isEtf = Boolean(ev.is_etf);
+        const grid = document.createElement("div");
+        grid.className = "detail-grid";
+        grid.style.marginBottom = "12px";
+        const overviewMeta = isEtf
+            ? [
+                ["운용사", (details.etf_info && details.etf_info.issuer) || "-"],
+                ["거래소", details.exchange || (ev.market === "US" ? "US" : "KRX")],
+                ["NAV", (details.etf_info && details.etf_info.nav) || "-"],
+                ["통화", ev.currency || "-"],
+            ]
+            : [
+                ["영문명", details.name_eng || "-"],
+                ["거래소", details.exchange || (ev.market === "US" ? "US" : "KRX")],
+                ["업종", m.industry || "-"],
+                ["통화", ev.currency || "-"],
+            ];
+        overviewMeta.forEach(([k, v]) => grid.appendChild(_makeChip(k, v)));
+        container.appendChild(grid);
+
+        const box = document.createElement("div");
+        box.className = "overview-text-box";
+        box.style.whiteSpace = "pre-line";
+        if (details.overview_summary) {
+            box.textContent = details.overview_summary;
+        } else {
+            box.textContent = isEtf
+                ? "해당 ETF의 상세 상품개요 텍스트가 제공되지 않습니다. '상품현황 · 구성' 탭에서 운용 정보와 구성종목을 확인하실 수 있습니다."
+                : "해당 종목의 기업개요 정보가 제공되지 않습니다.";
+        }
+        container.appendChild(box);
+    }
+
+    function renderFinancialTab(ev, details) {
+        const container = document.getElementById("tab1-financial-content");
+        if (!container) return;
+        container.innerHTML = "";
+
+        const tables = details.financial_tables || {};
+        let currentMode = tables.annual ? "annual" : (tables.quarter ? "quarter" : null);
+        if (!currentMode) {
+            container.innerHTML = `<p class="empty-msg">수집된 재무분석 데이터가 없습니다. (ETF 또는 미제공 종목)</p>`;
+            return;
+        }
+
+        const headerRow = document.createElement("div");
+        headerRow.className = "fin-toggle-row";
+
+        const btns = document.createElement("div");
+        btns.className = "fin-toggle-btns";
+
+        const unitEl = document.createElement("span");
+        unitEl.className = "section-note";
+
+        const chartCard = document.createElement("div");
+        chartCard.className = "evidence-chart-card";
+        const chartBox = document.createElement("div");
+        chartBox.className = "evidence-chart-box";
+        const chartCanvas = document.createElement("canvas");
+        chartBox.appendChild(chartCanvas);
+        chartCard.appendChild(chartBox);
+
+        const tableWrap = document.createElement("div");
+        tableWrap.className = "table-wrapper";
+
+        function _parseCellNum(v) {
+            if (v === null || v === undefined || v === "-") return null;
+            const n = Number(String(v).replace(/,/g, ""));
+            return Number.isFinite(n) ? n : null;
+        }
+
+        function drawTable(mode) {
+            const tblData = tables[mode];
+            tableWrap.innerHTML = "";
+            if (!tblData || !(tblData.rows || []).length) {
+                unitEl.textContent = "";
+                chartCard.classList.add("hidden");
+                tableWrap.innerHTML = `<p class="empty-msg">해당 기간의 재무 데이터가 없습니다.</p>`;
+                return;
+            }
+            unitEl.textContent = `단위: ${tblData.unit || "-"}`;
+
+            // 차트 렌더링 (매출액, 영업이익/EBIT, 당기순이익)
+            const rowMap = {};
+            (tblData.rows || []).forEach((r) => { rowMap[r.title] = r.values || []; });
+            const revArr = (rowMap["매출액"] || []).map(_parseCellNum);
+            const opArr = (rowMap["영업이익"] || rowMap["EBIT"] || []).map(_parseCellNum);
+            const netArr = (rowMap["당기순이익"] || []).map(_parseCellNum);
+            const labels = (tblData.periods || []).map((p) => (p.is_consensus ? `${p.title}(E)` : p.title));
+
+            if (typeof Chart !== "undefined" && labels.length > 0 && (revArr.some((v) => v !== null) || opArr.some((v) => v !== null))) {
+                chartCard.classList.remove("hidden");
+                if (evFinChart) evFinChart.destroy();
+                const datasets = [];
+                if (revArr.some((v) => v !== null)) {
+                    datasets.push({
+                        label: "매출액",
+                        data: revArr,
+                        backgroundColor: "rgba(37, 99, 235, 0.78)",
+                        borderRadius: 4,
+                    });
+                }
+                if (opArr.some((v) => v !== null)) {
+                    datasets.push({
+                        label: rowMap["영업이익"] ? "영업이익" : "EBIT",
+                        data: opArr,
+                        backgroundColor: "rgba(16, 185, 129, 0.8)",
+                        borderRadius: 4,
+                    });
+                }
+                if (netArr.some((v) => v !== null)) {
+                    datasets.push({
+                        label: "당기순이익",
+                        data: netArr,
+                        backgroundColor: "rgba(245, 158, 11, 0.8)",
+                        borderRadius: 4,
+                    });
+                }
+                evFinChart = new Chart(chartCanvas, {
+                    type: "bar",
+                    data: { labels, datasets },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { position: "top", labels: { boxWidth: 12, font: { size: 11 } } },
+                        },
+                        scales: {
+                            x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+                            y: { ticks: { font: { size: 11 } } },
+                        },
+                    },
+                });
+            } else {
+                chartCard.classList.add("hidden");
+            }
+
+            const table = document.createElement("table");
+            table.className = "financials-table";
+
+            const thead = document.createElement("thead");
+            const headTr = document.createElement("tr");
+            const firstTh = document.createElement("th");
+            firstTh.textContent = "주요 재무항목";
+            headTr.appendChild(firstTh);
+            (tblData.periods || []).forEach((p) => {
+                const th = document.createElement("th");
+                th.textContent = p.is_consensus ? `${p.title} (E)` : p.title;
+                headTr.appendChild(th);
+            });
+            thead.appendChild(headTr);
+            table.appendChild(thead);
+
+            const tbody = document.createElement("tbody");
+            (tblData.rows || []).forEach((r) => {
+                const tr = document.createElement("tr");
+                const titleTd = document.createElement("td");
+                titleTd.style.fontWeight = "600";
+                titleTd.textContent = r.title || "-";
+                tr.appendChild(titleTd);
+                (r.values || []).forEach((v) => {
+                    const td = document.createElement("td");
+                    td.textContent = v || "-";
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+            tableWrap.appendChild(table);
+        }
+
+        [
+            { key: "annual", label: "연간 실적" },
+            { key: "quarter", label: "분기 실적" },
+        ].forEach((opt) => {
+            if (!tables[opt.key]) return;
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = `fin-toggle-btn ${opt.key === currentMode ? "active" : ""}`;
+            btn.textContent = opt.label;
+            btn.addEventListener("click", () => {
+                btns.querySelectorAll(".fin-toggle-btn").forEach((b) => b.classList.remove("active"));
+                btn.classList.add("active");
+                drawTable(opt.key);
+            });
+            btns.appendChild(btn);
+        });
+
+        headerRow.appendChild(btns);
+        headerRow.appendChild(unitEl);
+        container.appendChild(headerRow);
+        container.appendChild(chartCard);
+        container.appendChild(tableWrap);
+        drawTable(currentMode);
     }
 
     // ==================== 4. [탭2] 리밸런싱 도우미 (Dify 없음) ====================
@@ -476,7 +1145,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const closeEl = document.getElementById("tab3-close-price");
         const pctEl = document.getElementById("tab3-change-pct");
-        closeEl.textContent = `${Number(l.close).toLocaleString()}원`;
+        closeEl.textContent = formatPrice(l.close, data.currency || "KRW");
         pctEl.textContent = `${l.change_pct > 0 ? "+" : ""}${l.change_pct}%`;
         closeEl.className = `current-price ${l.change_pct > 0 ? "up" : l.change_pct < 0 ? "down" : "flat"}`;
         pctEl.className = `change-rate ${l.change_pct > 0 ? "up" : l.change_pct < 0 ? "down" : "flat"}`;
@@ -684,9 +1353,25 @@ document.addEventListener("DOMContentLoaded", () => {
         el.textContent = "";
     }
 
-    function formatMarketCap(won) {
-        if (won === null || won === undefined) return "-";
-        const eok = Math.round(won / 1e8);
+    function formatPrice(val, currency = "KRW") {
+        if (val === null || val === undefined) return "-";
+        const num = Number(val);
+        if (currency === "USD") {
+            return `$${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+        return `${num.toLocaleString()}원`;
+    }
+
+    function formatMarketCap(val, currency = "KRW") {
+        if (val === null || val === undefined) return "-";
+        if (currency === "USD") {
+            const num = Number(val);
+            if (num >= 1e12) return `$${(num / 1e12).toFixed(2)}T`;
+            if (num >= 1e9) return `$${(num / 1e9).toFixed(2)}B`;
+            if (num >= 1e6) return `$${(num / 1e6).toFixed(2)}M`;
+            return `$${num.toLocaleString()}`;
+        }
+        const eok = Math.round(val / 1e8);
         const jo = Math.floor(eok / 10000);
         const remainEok = eok % 10000;
         if (jo > 0) {

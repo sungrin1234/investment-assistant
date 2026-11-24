@@ -40,21 +40,45 @@
                 </div>
 
                 <div class="input-row">
-                    <input type="text" id="tab1-code" placeholder="종목명 또는 코드 6자리 (예: SK하이닉스, 000660)" value="000660">
+                    <input type="text" id="tab1-code" placeholder="종목명, 국내 6자리 또는 미국 티커 (예: 삼성전자, 000660, AAPL)" value="000660">
                     <button type="button" id="tab1-analyze-btn" class="primary-btn">종목 조회 &amp; AI 분석</button>
                     <button type="button" class="example-btn" data-target="tab1-code" data-code="005930">삼성전자</button>
-                    <button type="button" class="example-btn" data-target="tab1-code" data-code="000660">SK하이닉스</button>
                     <button type="button" class="example-btn" data-target="tab1-code" data-code="069500">KODEX 200</button>
+                    <button type="button" class="example-btn" data-target="tab1-code" data-code="379800">KODEX S&amp;P500</button>
+                    <button type="button" class="example-btn" data-target="tab1-code" data-code="AAPL">애플 (AAPL)</button>
+                    <button type="button" class="example-btn" data-target="tab1-code" data-code="NVDA">엔비디아 (NVDA)</button>
                     <button type="button" id="tab1-reset-btn" class="secondary-btn">새 대화</button>
                 </div>
 
                 <div id="tab1-evidence-box" class="evidence-box hidden">
                     <div class="evidence-header">
-                        <strong>📌 AI에게 전달된 실시간 수집 근거</strong>
-                        <span id="tab1-evidence-summary"></span>
+                        <div class="evidence-stock-title">
+                            <span id="tab1-evidence-summary" class="evidence-stock-name"></span>
+                            <span id="tab1-evidence-market" class="evidence-market-badge hidden"></span>
+                        </div>
+                        <span class="evidence-caption">📌 네이버 증권 실시간 수집 정보</span>
                     </div>
-                    <div id="tab1-evidence-cards" class="evidence-cards"></div>
-                    <div id="tab1-evidence-news" class="evidence-news"></div>
+
+                    <div class="evidence-subtabs" role="tablist">
+                        <button type="button" class="evidence-subtab-btn active" data-subtab="summary">요약 &amp; 뉴스</button>
+                        <button type="button" class="evidence-subtab-btn" data-subtab="company">기업현황</button>
+                        <button type="button" class="evidence-subtab-btn" data-subtab="overview">기업개요</button>
+                        <button type="button" class="evidence-subtab-btn" data-subtab="financial">재무분석</button>
+                    </div>
+
+                    <div id="ev-panel-summary" class="evidence-subpanel">
+                        <div id="tab1-evidence-cards" class="evidence-cards"></div>
+                        <div id="tab1-evidence-news" class="evidence-news"></div>
+                    </div>
+                    <div id="ev-panel-company" class="evidence-subpanel hidden">
+                        <div id="tab1-company-content"></div>
+                    </div>
+                    <div id="ev-panel-overview" class="evidence-subpanel hidden">
+                        <div id="tab1-overview-content"></div>
+                    </div>
+                    <div id="ev-panel-financial" class="evidence-subpanel hidden">
+                        <div id="tab1-financial-content"></div>
+                    </div>
                 </div>
             </div>
 
@@ -159,14 +183,15 @@
                     <h2>기술지표 차트 + AI 설명 <span class="badge-bot">FDR 계산 + Dify 챗봇②</span></h2>
                 </div>
                 <form id="tab3-form" class="search-form">
-                    <input type="text" id="tab3-code" placeholder="종목명 또는 코드 6자리 입력 (예: SK하이닉스, 000660)" value="000660">
+                    <input type="text" id="tab3-code" placeholder="종목명, 국내 6자리 또는 미국 티커 입력 (예: SK하이닉스, AAPL)" value="000660">
                     <button type="submit" id="tab3-load-btn">차트 &amp; 지표 계산</button>
                 </form>
                 <div class="quick-examples">
                     <span>예시 종목:</span>
                     <button type="button" class="example-btn" data-target="tab3-code" data-code="005930">삼성전자 (005930)</button>
                     <button type="button" class="example-btn" data-target="tab3-code" data-code="000660">SK하이닉스 (000660)</button>
-                    <button type="button" class="example-btn" data-target="tab3-code" data-code="069500">KODEX 200 (069500)</button>
+                    <button type="button" class="example-btn" data-target="tab3-code" data-code="AAPL">애플 (AAPL)</button>
+                    <button type="button" class="example-btn" data-target="tab3-code" data-code="NVDA">엔비디아 (NVDA)</button>
                 </div>
             </div>
 
